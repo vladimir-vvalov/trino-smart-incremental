@@ -1,0 +1,14 @@
+
+target/
+dbt_packages/
+logs/
+dbt_modules/
+*.pyc
+__pycache__/
+.DS_Store
+*.log
+.env
+venv/
+env/
+profiles.yml
+!integration_tests/profiles.yml
