@@ -131,7 +131,8 @@
           si_mode = si_mode,
           si_min = si_min,
           si_max = si_max,
-          si_null_key = si_null_key
+          si_null_key = si_null_key,
+          dest_columns = dest_columns
     ) -%}
 
     {#-- Build the sql --#}

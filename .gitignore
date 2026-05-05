@@ -12,3 +12,4 @@ venv/
 env/
 profiles.yml
 !integration_tests/profiles.yml
+*.code-workspace

@@ -10,6 +10,7 @@
 {% endmacro %}
 
 
+
 {#--
   si_get_key_conditions
 
@@ -31,9 +32,8 @@
     'key_expr':     str,  -- SQL expression used for the key
   }
 --#}
-{% macro get_key_conditions(tmp_relation, unique_key, incremental_strategy, si_key, si_mode, si_min, si_max, si_null_key) %}
+{% macro get_key_conditions(tmp_relation, unique_key, incremental_strategy, si_key, si_mode, si_min, si_max, si_null_key, dest_columns=none) %}
 
-  {%- set _dbt_alias = '__si_dbt_key__' -%}
   {%- set _result = {'where_clause': '', 'key_expr': ''} -%}
   {%- set _null_policy = si_null_key if si_null_key else 'warn' -%}
 
@@ -57,33 +57,43 @@
     {%- endfor -%}
     {%- set _key_expr = _cast_parts | join(" || '|' || ") -%}
   {%- endif -%}
-  {%- set _select_expr = _key_expr ~ ' AS ' ~ _dbt_alias -%}
 
   {#-- ── IN mode (default) ─────────────────────────────────────────────── --#}
   {%- set _eff_mode = si_mode if si_mode else 'in' -%}
 
   {%- if _eff_mode == 'in' -%}
 
-    {%- set _vdict = smart_incremental.distinct_from_relation(tmp_relation, _select_expr) -%}
-    {%- set _values = _vdict.get(_dbt_alias, []) -%}
-
-    {#-- NULL handling --#}
-    {%- set _has_nulls = (none in _values) or ('' in _values) -%}
-    {%- if _has_nulls -%}
-      {%- if _null_policy == 'error' -%}
-        {%- do exceptions.raise_compiler_error(
-              "smart_incremental: NULL found in si_key values. "
-              ~ "Set si_null_key='ignore' or 'warn' to suppress.") -%}
-      {%- elif _null_policy == 'warn' -%}
-        {%- do log("smart_incremental WARNING: NULL found in si_key values. "
-                   ~ "Nulls are excluded from the IN filter.", info=true) -%}
+    {%- if si_key | length > 1 -%}
+      {#-- Composite key: (col1 = v1 and col2 = v2) or (col1 = v11 and col2 = v12) ...
+           No CAST — each column stays typed, enabling predicate pushdown. --#}
+      {%- set _rows = smart_incremental.clean_null_rows(
+            smart_incremental.distinct_from_relation(tmp_relation, si_key | join(', '), col_types=dest_columns),
+            _null_policy) -%}
+      {%- set _row_conditions = [] -%}
+      {%- for _row in _rows -%}
+        {%- set _col_conds = [] -%}
+        {%- for _col, _val in _row.items() -%}
+          {%- do _col_conds.append(_col ~ ' = ' ~ _val) -%}
+        {%- endfor -%}
+        {%- do _row_conditions.append('(' ~ _col_conds | join(' and ') ~ ')') -%}
+      {%- endfor -%}
+      {%- if _row_conditions | length > 0 -%}
+        {%- set _where = _row_conditions | join('\n        or ') -%}
+        {%- do _result.update({'where_clause': _where, 'key_expr': si_key | join(', ')}) -%}
       {%- endif -%}
-      {%- set _values = _values | reject('none') | reject('equalto', '') | list -%}
-    {%- endif -%}
 
-    {%- if _values | length > 0 -%}
-      {%- set _where = _key_expr ~ ' IN (' ~ _values | join(', ') ~ ')' -%}
-      {%- do _result.update({'where_clause': _where, 'key_expr': _key_expr}) -%}
+    {%- else -%}
+      {#-- Single key: col IN (v1, v2, ...) --#}
+      {%- set _rows = smart_incremental.clean_null_rows(
+            smart_incremental.distinct_from_relation(tmp_relation, _key_expr, col_types=dest_columns),
+            _null_policy) -%}
+      {%- set _values = _rows | map(attribute=_key_expr) | list -%}
+
+      {%- if _values | length > 0 -%}
+        {%- set _where = _key_expr ~ ' IN (' ~ _values | join(', ') ~ ')' -%}
+        {%- do _result.update({'where_clause': _where, 'key_expr': _key_expr}) -%}
+      {%- endif -%}
+
     {%- endif -%}
 
   {#-- ── Range modes ───────────────────────────────────────────────────── --#}
@@ -125,3 +135,33 @@ from {{ tmp_relation }}
 {% endmacro %}
 
 
+{#-- Filters null rows from a list of row dicts.
+  A row is dropped if any of its column values is null/empty.
+  Applies null_policy once if any null row was found.
+  Returns cleaned list.
+--#}
+{% macro clean_null_rows(rows, null_policy) %}
+  {%- set _clean = [] -%}
+  {%- set _had_null = [] -%}
+  {%- for _row in rows -%}
+    {%- set _null_in_row = [] -%}
+    {%- for _col, _val in _row.items() -%}
+      {%- if _val is none or _val == '' -%}{%- do _null_in_row.append(1) -%}{%- endif -%}
+    {%- endfor -%}
+    {%- if _null_in_row | length > 0 -%}
+      {%- do _had_null.append(1) -%}
+    {%- else -%}
+      {%- do _clean.append(_row) -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if _had_null | length > 0 -%}
+    {%- if null_policy == 'error' -%}
+      {%- do exceptions.raise_compiler_error(
+            "(smart_incremental) ERROR: NULL found in si_key values. "
+            ~ "Set si_null_key='ignore' or 'warn' to suppress.") -%}
+    {%- elif null_policy == 'warn' -%}
+      {%- do exceptions.warn("(smart_incremental) WARNING: NULL found in si_key values, affected rows skipped.") -%}
+    {%- endif -%}
+  {%- endif -%}
+  {{ return(_clean) }}
+{% endmacro %}

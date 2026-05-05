@@ -1,4 +1,4 @@
-#--
+{#--
   distinct_from_relation(relation, expression, row_name_by, conditions, is_quoting)
 
   Reads DISTINCT values of an expression from a relation into a nested dict.
@@ -9,21 +9,19 @@
     [WHERE <cond1> AND <cond2> AND ...]
 
   Parameters:
-    relation    вЂ“ Relation object (e.g. this, ref(...), si_forward(...)); required
-    expression  вЂ“ SQL expression string (e.g. 'col1' or 'col1, col2'); required
-    row_name_by вЂ“ none/''         в†’ first column value  [default]
-                  '__index__'    в†’ 0-based loop index
-                  '<colname>'   в†’ value of the named column
-    conditions  вЂ“ list of WHERE condition strings; [] в†’ no WHERE clause
-    is_quoting  вЂ“ true / false / none (auto)
+    relation    - Relation object (e.g. this, ref(...), si_forward(...)); required
+    expression  - SQL expression string (e.g. 'col1' or 'col1, col2'); required
+    conditions  - list of WHERE condition strings; [] -> no WHERE clause
+    is_quoting  - true / false / none (auto)
 
-  Returns: dict { row_id: { column_id: value } }
+  Returns: list [ { column_id: value } ]
 --#}
 {% macro distinct_from_relation(
     relation,
     expression,
     conditions = [],
-    is_quoting = none
+    is_quoting = none,
+    col_types = none
 ) %}
     {% if not expression or expression is none %}
         {{ return({}) }}
@@ -51,18 +49,14 @@ from {{ relation }}
         relation = relation,
         sql_query = _sql,
         row_name_by = '__index__',
-        is_quoting = is_quoting
+        is_quoting = is_quoting,
+        dest_columns = col_types
     ) %}
 
-    {#-- Post-process: {0:{col:val},...} в†’ {col:[val1,val2,...]} --#}
-    {% set _result = {} %}
-    {% for _idx, _row in _raw.items() %}
-        {% for _col, _val in _row.items() %}
-            {% if _col not in _result %}
-                {% do _result.update({_col: []}) %}
-            {% endif %}
-            {% do _result[_col].append(_val) %}
-        {% endfor %}
+    {#-- Post-process: {0:{col:val},...} -> [{col:val,...}, ...] --#}
+    {% set _result = [] %}
+    {% for _row in _raw.values() %}
+        {% do _result.append(_row) %}
     {% endfor %}
     {{ return(_result) }}
 {% endmacro %}
@@ -77,32 +71,32 @@ from {{ relation }}
     SELECT MAX(<col1>) AS max_<col1>, ...   -- or MIN / both
     FROM <relation>
     [WHERE ...]
-    в†’ single row with overall agg per column; result key = '__index__' (0)
+    -> single row with overall agg per column; result key = '__index__' (0)
 
   Generates (row_name_by == '__index__'):
     SELECT <col1>, <col2>, ...
     FROM <relation>
     [WHERE ...]
-    в†’ rows as-is, no aggregation, no GROUP BY
+    -> rows as-is, no aggregation, no GROUP BY
 
   Generates (row_name_by == '<colname>'):
     SELECT <key_col>, MAX(<col2>) AS max_<col2>, ...
     FROM <relation>
     [WHERE ...]
     GROUP BY <key_col>
-    в†’ one row per key value
+    -> one row per key value
 
   Parameters:
-    relation    вЂ“ Relation object (e.g. this, ref(...), si_forward(...)); required
-    columns     вЂ“ list of column names to aggregate; [] в†’ return {}
-    agg_type    вЂ“ 'max'    в†’ MAX only, alias max_<col>      [default]
-                  'min'    в†’ MIN only, alias min_<col>
-                  'minmax' в†’ both MAX and MIN as separate columns
-    row_name_by вЂ“ none/''         в†’ aggregate all columns, no GROUP BY (overall)  [default]
-                  '__index__'    в†’ 0-based index; no aggregation, no GROUP BY
-                  '<colname>'   в†’ named column is key, GROUP BY it; aggregate on others
-    conditions  вЂ“ list of WHERE condition strings; [] в†’ no WHERE clause
-    is_quoting  вЂ“ true / false / none (auto)
+    relation    - Relation object (e.g. this, ref(...), si_forward(...)); required
+    columns     - list of column names to aggregate; [] -> return {}
+    agg_type    - 'max'    -> MAX only, alias max_<col>      [default]
+                  'min'    -> MIN only, alias min_<col>
+                  'minmax' -> both MAX and MIN as separate columns
+    row_name_by - none/''         -> aggregate all columns, no GROUP BY (overall)  [default]
+                  '__index__'    -> 0-based index; no aggregation, no GROUP BY
+                  '<colname>'   -> named column is key, GROUP BY it; aggregate on others
+    conditions  - list of WHERE condition strings; [] -> no WHERE clause
+    is_quoting  - true / false / none (auto)
 
   Returns: dict { row_id: { column_id: value } }
 --#}
@@ -142,10 +136,10 @@ where
             {% if col != _key_col %}
                 {% if agg_type == 'min' %}
                     {% do _select_parts.append('min(' ~ col ~ ') as min_' ~ col) %}
-                {% elif agg_type == 'minmax' %}
-                    {% do _select_parts.append('min(' ~ col ~ ') as min_' ~ col) %}
+                {% elif agg_type == 'max' %}
                     {% do _select_parts.append('max(' ~ col ~ ') as max_' ~ col) %}
                 {% else %}
+                    {% do _select_parts.append('min(' ~ col ~ ') as min_' ~ col) %}
                     {% do _select_parts.append('max(' ~ col ~ ') as max_' ~ col) %}
                 {% endif %}
             {% endif %}
@@ -167,7 +161,7 @@ from {{ relation }}
         row_name_by = '__index__' if not row_name_by else row_name_by,
         is_quoting = is_quoting
     ) %}
-    {#-- row_name_by=none: single overall-agg row вЂ” flatten {0: row_dict} в†’ row_dict --#}
+    {#-- row_name_by=none: single overall-agg row вЂ” flatten {0: row_dict} -> row_dict --#}
     {% if not row_name_by %}
         {{ return(_raw.get(0, {})) }}
     {% endif %}
@@ -220,11 +214,11 @@ from {{ relation }}
   Shortcut for values_from_query without custom SQL.
 
   Parameters:
-    relation    вЂ“ Relation object (e.g. this, ref(...), si_forward(...)); required
-    row_name_by вЂ“ none/''         в†’ first column value  [default]
-                  '__index__'    в†’ 0-based loop index
-                  '<colname>'   в†’ value of the named column
-    is_quoting  вЂ“ true / false / none (auto)
+    relation    - Relation object (e.g. this, ref(...), si_forward(...)); required
+    row_name_by - none/''         -> first column value  [default]
+                  '__index__'    -> 0-based loop index
+                  '<colname>'   -> value of the named column
+    is_quoting  - true / false / none (auto)
 
   Returns: dict { row_id: { column_id: value } }
 --#}
@@ -234,9 +228,43 @@ from {{ relation }}
     is_quoting = none
 ) %}
     {{ return(smart_incremental.get_values_impl(
-        table = relation.identifier,
-        schema = relation.schema,
-        database = relation.database,
+        relation = relation,
+        row_name_by = row_name_by,
+        is_quoting = is_quoting
+    )) }}
+{% endmacro %}
+
+
+{#--
+  values_from_table(table, schema, database, sql_query, row_name_by, is_quoting)
+
+  Reads rows from a table by name into a nested dict.
+  Constructs a Relation object and delegates to get_values_impl.
+
+  Parameters:
+    table       - table name; required
+    schema      - schema name; required
+    database    - database name; required
+    sql_query   - custom SQL; if '' -> SELECT * FROM table is used
+    row_name_by - none/''         -> first column value  [default]
+                  '__index__'    -> 0-based loop index
+                  '<colname>'   -> value of the named column
+    is_quoting  - true / false / none (auto)
+
+  Returns: dict { row_id: { column_id: value } }
+--#}
+{% macro values_from_table(
+    table,
+    schema = model.schema,
+    database = model.database,
+    sql_query = '',
+    row_name_by = none,
+    is_quoting = none
+) %}
+    {% set _rel = api.Relation.create(database=database, schema=schema, identifier=table) %}
+    {{ return(smart_incremental.get_values_impl(
+        relation = _rel,
+        sql_query = sql_query,
         row_name_by = row_name_by,
         is_quoting = is_quoting
     )) }}
@@ -250,14 +278,14 @@ from {{ relation }}
   separate table/schema/database parameters.
 
   Parameters:
-    relation    вЂ“ Relation object (e.g. this, ref(...), si_forward(...)); required
-    sql_query   вЂ“ custom SQL; if '' в†’ SELECT * FROM relation is used
-    row_name_by вЂ“ none/''         в†’ first column value  [default]
-                  '__index__'    в†’ 0-based loop index
-                  '<colname>'   в†’ value of the named column
-    is_quoting  вЂ“ true  в†’ force single-quote all values
-                  false в†’ force no quoting
-                  none  в†’ auto
+    relation    - Relation object (e.g. this, ref(...), si_forward(...)); required
+    sql_query   - custom SQL; if '' -> SELECT * FROM relation is used
+    row_name_by - none/''         -> first column value  [default]
+                  '__index__'    -> 0-based loop index
+                  '<colname>'   -> value of the named column
+    is_quoting  - true  -> force single-quote all values
+                  false -> force no quoting
+                  none  -> auto
 
   Returns: dict { row_id: { column_id: value } }
 --#}
@@ -265,15 +293,15 @@ from {{ relation }}
     relation,
     sql_query = '',
     row_name_by = none,
-    is_quoting = none
+    is_quoting = none,
+    dest_columns = none
 ) %}
     {{ return(smart_incremental.get_values_impl(
-        table = relation.identifier,
-        schema = relation.schema,
-        database = relation.database,
+        relation = relation,
         sql_query = sql_query,
         row_name_by = row_name_by,
-        is_quoting = is_quoting
+        is_quoting = is_quoting,
+        dest_columns = dest_columns
     )) }}
 {% endmacro %}
 
@@ -285,41 +313,39 @@ from {{ relation }}
     { row_id: { column_id: value } }
 
   Parameters:
-    table       вЂ“ table name          (default: model.name)
-    schema      вЂ“ schema name         (default: model.schema)
-    database    вЂ“ database name       (default: model.database)
-    sql_query   вЂ“ custom SQL; if '' в†’ SELECT * FROM table is used
-    row_name_by вЂ“ key selection mode:
-                  none / ''     в†’ first column value  [default]
-                  '__index__'   в†’ 0-based loop index
-                  '<colname>'   в†’ value of the named column
-    is_quoting  вЂ“ true  в†’ force single-quote all values
-                  false в†’ force no quoting
-                  none  в†’ auto: Number/Boolean unquoted, everything else quoted
+    table       - table name          (default: model.name)
+    schema      - schema name         (default: model.schema)
+    database    - database name       (default: model.database)
+    sql_query   - custom SQL; if '' -> SELECT * FROM table is used
+    row_name_by - key selection mode:
+                  none / ''     -> first column value  [default]
+                  '__index__'   -> 0-based loop index
+                  '<colname>'   -> value of the named column
+    is_quoting  - true  -> force single-quote all values
+                  false -> force no quoting
+                  none  -> auto: Number/Boolean unquoted, everything else quoted
 
   Config keys read from the model config (lower priority than parameters):
-    si_in_rows_limit вЂ“ max rows to fetch   (default: 1 000 000)
+    si_in_rows_limit - max rows to fetch   (default: 1 000 000)
 
   Returns: dict { row_id: { column_id: value } }
 --#}
 {% macro get_values_impl(
-    table = model.name,
-    schema = model.schema,
-    database = model.database,
+    relation,
     sql_query = '',
     row_name_by = none,
-    is_quoting = none
+    is_quoting = none,
+    dest_columns = none
 ) %}
-    {{ return(adapter.dispatch('get_values_impl', 'smart_incremental')(table, schema, database, sql_query, row_name_by, is_quoting)) }}
+    {{ return(adapter.dispatch('get_values_impl', 'smart_incremental')(relation, sql_query, row_name_by, is_quoting, dest_columns)) }}
 {% endmacro %}
 
 {% macro trino__get_values_impl(
-    table = model.name,
-    schema = model.schema,
-    database = model.database,
+    relation,
     sql_query = '',
     row_name_by = none,
-    is_quoting = none
+    is_quoting = none,
+    dest_columns = none
 ) %}
 
     {#-- Skip if not execute --#}
@@ -327,16 +353,16 @@ from {{ relation }}
         {{ return({}) }}
     {% endif %}
 
-    {#-- Skip if no table and no SQL query --#}
-    {% if not table and not sql_query %}
+    {#-- Skip if no relation --#}
+    {% if not relation %}
         {{ return({}) }}
     {% endif %}
 
     {#-- Skip if table does not exist --#}
-    {% if table and not smart_incremental.check_table(
-            model_name = table,
-            schema_name = schema,
-            database_name = database
+    {% if not smart_incremental.check_table(
+            model_name = relation.identifier,
+            schema_name = relation.schema,
+            database_name = relation.database
     ) %}
         {{ return({}) }}
     {% endif %}
@@ -361,7 +387,7 @@ from {{ relation }}
     {#-- Build base query --#}
     {% if not sql_query %}
         {% set base_query %}
-            select * from "{{ database }}"."{{ schema }}"."{{ table }}"
+            select * from {{ relation }}
         {% endset %}
     {% else %}
         {% set base_query = sql_query %}
@@ -418,6 +444,18 @@ from {{ relation }}
             {% set quote_mode = 'auto' %}
         {% endif %}
 
+        {#-- build col type lookup from dest_columns if provided, else query schema --#}
+        {% set _col_types = {} %}
+        {% if dest_columns is not none and dest_columns | length > 0 %}
+            {% for _c in dest_columns %}
+                {% do _col_types.update({_c.name: _c.data_type | lower}) %}
+            {% endfor %}
+        {% elif quote_mode == 'auto' %}
+            {% for _c in adapter.get_columns_in_relation(relation) %}
+                {% do _col_types.update({_c.name: _c.data_type | lower}) %}
+            {% endfor %}
+        {% endif %}
+
         {% for row in results.rows %}
 
             {#-- row_id: index / first column / named column --#}
@@ -453,13 +491,22 @@ from {{ relation }}
                 {% elif quote_mode == 'force_raw' %}
                     {% set val = raw_val | string %}
                 {% else %}
-                    {#-- auto: Boolean в†’ true/false; Number в†’ bare; everything else в†’ quoted --#}
+                    {#-- auto: Boolean -> true/false; Number -> bare; Date/Timestamp -> typed literal; everything else -> quoted --#}
+                    {% set _dtype = _col_types.get(col_name, '') %}
+                    {#-- fallback: strip min_/max_ prefix for aggregated columns --#}
+                    {% if not _dtype and (col_name.startswith('min_') or col_name.startswith('max_')) %}
+                        {% set _dtype = _col_types.get(col_name[4:], '') %}
+                    {% endif %}
                     {% if raw_val is sameas true %}
                         {% set val = 'true' %}
                     {% elif raw_val is sameas false %}
                         {% set val = 'false' %}
                     {% elif raw_val is number %}
                         {% set val = raw_val | string %}
+                    {% elif _dtype == 'date' %}
+                        {% set val = "DATE '" ~ (raw_val | string) ~ "'" %}
+                    {% elif 'timestamp' in _dtype %}
+                        {% set val = "TIMESTAMP '" ~ (raw_val | string) ~ "'" %}
                     {% else %}
                         {% set val = "'" ~ (raw_val | string | replace("'", "''")) ~ "'" %}
                     {% endif %}
