@@ -114,6 +114,14 @@ Add to your `packages.yml`:
 
 ```yaml
 packages:
+  - tarball: https://github.com/vladimir-vvalov/trino-smart-incremental/archive/refs/tags/0.1.0.tar.gz
+    name: 'trino-smart-incremental'
+```
+
+Or via git ref:
+
+```yaml
+packages:
   - git: "https://github.com/vladimir-vvalov/trino-smart-incremental.git"
     revision: v0.1.0
 ```
