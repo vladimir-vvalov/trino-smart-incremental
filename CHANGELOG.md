@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.0.3 - (2026-05-06)
+
+### Fixed
+
+- `si_min` / `si_max` — values are now correctly read via `config.get`
+- Range mode — fixed undefined `_dbt_alias` variable used for MIN/MAX aliases
+
+### Changed
+
+- Code cleanup and deduplication; removed redundant intermediate variables
+- `temporary_helpers.sql` renamed to `helpers.sql`
+- New `build_where_clause(conditions)` macro extracted from duplicated logic
+
+---
+
 ## 0.0.2 - (2026-05-05)
 
 ### Changed

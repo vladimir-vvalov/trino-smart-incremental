@@ -85,13 +85,12 @@
     {%- else -%}
       {#-- Single key: col IN (v1, v2, ...) --#}
       {%- set _rows = smart_incremental.clean_null_rows(
-            smart_incremental.distinct_from_relation(tmp_relation, _key_expr, col_types=dest_columns),
+            smart_incremental.distinct_from_relation(tmp_relation, si_key[0], col_types=dest_columns),
             _null_policy) -%}
-      {%- set _values = _rows | map(attribute=_key_expr) | list -%}
+      {%- set _values = _rows | map(attribute=si_key[0]) | list -%}
 
       {%- if _values | length > 0 -%}
-        {%- set _where = _key_expr ~ ' IN (' ~ _values | join(', ') ~ ')' -%}
-        {%- do _result.update({'where_clause': _where, 'key_expr': _key_expr}) -%}
+        {%- do _result.update({'where_clause': si_key[0] ~ ' IN (' ~ _values | join(', ') ~ ')', 'key_expr': si_key[0]}) -%}
       {%- endif -%}
 
     {%- endif -%}
@@ -99,33 +98,25 @@
   {#-- ── Range modes ───────────────────────────────────────────────────── --#}
   {%- elif _eff_mode in ('between', '>', '>=', '<', '<=') -%}
 
-    {#-- Aliases for MIN/MAX columns in the aggregate query — always _dbt_alias-based. --#}
-    {%- set _min_alias = 'min_' ~ _dbt_alias -%}
-    {%- set _max_alias = 'max_' ~ _dbt_alias -%}
-
-    {%- set _agg_sql %}
-select min({{ _key_expr }}) as {{ _min_alias }}, max({{ _key_expr }}) as {{ _max_alias }}
-from {{ tmp_relation }}
-    {%- endset -%}
-    {%- set _agg_raw = smart_incremental.values_from_query(relation = tmp_relation, sql_query = _agg_sql, row_name_by = '__index__') -%}
-    {%- set _agg = _agg_raw.get(0, {}) -%}
-    {%- set _act_min = si_min if si_min is not none else _agg.get(_min_alias) -%}
-    {%- set _act_max = si_max if si_max is not none else _agg.get(_max_alias) -%}
+    {%- set _agg = smart_incremental.minmax_from_relation(
+          relation = tmp_relation,
+          columns = [_key_expr],
+          agg_type = 'minmax'
+    ) -%}
+    {%- set _act_min = si_min if si_min is not none else _agg.get('min_' ~ _key_expr) -%}
+    {%- set _act_max = si_max if si_max is not none else _agg.get('max_' ~ _key_expr) -%}
 
     {%- if _eff_mode == 'between' -%}
       {%- if _act_min is not none and _act_max is not none -%}
-        {%- set _where = _key_expr ~ ' BETWEEN ' ~ _act_min ~ ' AND ' ~ _act_max -%}
-        {%- do _result.update({'where_clause': _where, 'key_expr': _key_expr}) -%}
+        {%- do _result.update({'where_clause': _key_expr ~ ' BETWEEN ' ~ _act_min ~ ' AND ' ~ _act_max, 'key_expr': _key_expr}) -%}
       {%- endif -%}
     {%- elif _eff_mode in ('>', '>=') -%}
       {%- if _act_min is not none -%}
-        {%- set _where = _key_expr ~ ' ' ~ _eff_mode ~ ' ' ~ _act_min -%}
-        {%- do _result.update({'where_clause': _where, 'key_expr': _key_expr}) -%}
+        {%- do _result.update({'where_clause': _key_expr ~ ' ' ~ _eff_mode ~ ' ' ~ _act_min, 'key_expr': _key_expr}) -%}
       {%- endif -%}
     {%- elif _eff_mode in ('<', '<=') -%}
       {%- if _act_max is not none -%}
-        {%- set _where = _key_expr ~ ' ' ~ _eff_mode ~ ' ' ~ _act_max -%}
-        {%- do _result.update({'where_clause': _where, 'key_expr': _key_expr}) -%}
+        {%- do _result.update({'where_clause': _key_expr ~ ' ' ~ _eff_mode ~ ' ' ~ _act_max, 'key_expr': _key_expr}) -%}
       {%- endif -%}
     {%- endif -%}
 

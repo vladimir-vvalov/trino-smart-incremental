@@ -7,12 +7,18 @@
   {%- set language = model['language'] -%}
   {%- set on_table_exists = config.get('on_table_exists', 'rename') -%}
   {% if on_table_exists not in ['rename', 'drop', 'replace'] %}
-      {%- set log_message = 'Invalid value for on_table_exists (%s) specified. Setting default value (%s).' % (on_table_exists, 'rename') -%}
-      {% do log(log_message) %}
+      {%- do log('Invalid value for on_table_exists (%s) specified. Setting default value (%s).' % (on_table_exists, 'rename')) -%}
       {%- set on_table_exists = 'rename' -%}
   {% endif %}
   {%- set incremental_strategy = config.get('incremental_strategy') or 'default' -%}
   {%- set incremental_predicates = config.get('predicates', none) or config.get('incremental_predicates', none) -%}
+  {%- if incremental_predicates is string -%}
+      {%- set incremental_predicates = [incremental_predicates] -%}
+  {%- elif not incremental_predicates -%}
+      {%- set incremental_predicates = [] -%}
+  {%- else -%}
+      {%- set incremental_predicates = [] + incremental_predicates -%}
+  {%- endif -%}
   {%- set merge_update_columns = config.get('merge_update_columns') -%}
   {%- set merge_exclude_columns = config.get('merge_exclude_columns') -%}
 
@@ -31,15 +37,13 @@
 
   {%- set si_mode = config.get('si_mode') -%}
   {% if si_mode and si_mode is not none and si_mode not in ['in', 'between', '>', '>=', '<', '<='] %}
-      {%- set error_message = "smart_incremental: invalid value for si_mode: '%s'. Allowed values: 'in', 'between', '>', '>=', '<', '<='." % si_mode -%}
-      {%- do exceptions.raise_compiler_error(error_message) -%}
+      {%- do exceptions.raise_compiler_error("smart_incremental: invalid value for si_mode: '%s'. Allowed values: 'in', 'between', '>', '>=', '<', '<='." % si_mode) -%}
   {% endif %}
-  {%- set si_min = si_min if si_min is not none and si_min else none -%}
-  {%- set si_max = si_max if si_max is not none and si_max else none -%}
+  {%- set si_min = config.get('si_min', none) -%}
+  {%- set si_max = config.get('si_max', none) -%}
   {%- set si_compare = config.get('si_compare', false) -%}
   {% if si_compare not in [true, false] %}
-      {%- set log_message = 'Invalid value for si_compare (%s) specified. Setting default value (%s).' % (si_compare, false) -%}
-      {% do log(log_message) %}
+      {%- do log('Invalid value for si_compare (%s) specified. Setting default value (%s).' % (si_compare, false)) -%}
       {%- set si_compare = false -%}
   {% endif %}
   {%- set si_compare_columns = config.get('si_compare_columns') -%}
@@ -51,10 +55,16 @@
       {%- do exceptions.raise_compiler_error("smart_incremental: si_exclude_compare_columns must be a list, got: " ~ si_exclude_compare_columns) -%}
   {% endif %}
   {%- set si_update_predicates = config.get('si_update_predicates', none) -%}
+  {%- if si_update_predicates is string -%}
+      {%- set si_update_predicates = [si_update_predicates] -%}
+  {%- elif not si_update_predicates -%}
+      {%- set si_update_predicates = [] -%}
+  {%- else -%}
+      {%- set si_update_predicates = [] + si_update_predicates -%}
+  {%- endif -%}
   {%- set si_null_key = config.get('si_null_key', 'warn') -%}
   {% if si_null_key not in ['warn', 'error', 'ignore'] %}
-      {%- set log_message = 'Invalid value for si_null_key (%s) specified. Setting default value (%s).' % (si_null_key, 'warn') -%}
-      {% do log(log_message) %}
+      {%- do log('Invalid value for si_null_key (%s) specified. Setting default value (%s).' % (si_null_key, 'warn')) -%}
       {%- set si_null_key = 'warn' -%}
   {% endif %}
 
@@ -144,7 +154,9 @@
           'dest_columns': dest_columns,
           'incremental_predicates': incremental_predicates,
           'si_update_predicates': si_update_predicates,
-          'key_conditions': key_conditions
+          'key_conditions': key_conditions,
+          'merge_update_columns': merge_update_columns,
+          'merge_exclude_columns': merge_exclude_columns
     }) %}
     {%- call statement('main') -%}
       {{ smart_incremental.get_incremental_sql(incremental_strategy, strategy_arg_dict) }}
