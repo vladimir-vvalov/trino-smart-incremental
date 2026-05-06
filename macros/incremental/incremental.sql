@@ -37,7 +37,10 @@
 
   {%- set si_mode = config.get('si_mode') -%}
   {% if si_mode and si_mode is not none and si_mode not in ['in', 'between', '>', '>=', '<', '<='] %}
-      {%- do exceptions.raise_compiler_error("smart_incremental: invalid value for si_mode: '%s'. Allowed values: 'in', 'between', '>', '>=', '<', '<='." % si_mode) -%}
+      {%- do exceptions.raise_compiler_error("(smart_incremental): invalid value for si_mode: '%s'. Allowed values: 'in', 'between', '>', '>=', '<', '<='." % si_mode) -%}
+  {% endif %}
+  {% if si_mode and si_mode is not none and si_key | length == 0 %}
+      {%- do exceptions.raise_compiler_error("(smart_incremental): si_mode is set to '%s' but si_key (or unique_key) is not defined." % si_mode) -%}
   {% endif %}
   {%- set si_min = config.get('si_min', none) -%}
   {%- set si_max = config.get('si_max', none) -%}
@@ -48,11 +51,11 @@
   {% endif %}
   {%- set si_compare_columns = config.get('si_compare_columns') -%}
   {% if si_compare_columns is not none and si_compare_columns and (si_compare_columns is string or si_compare_columns is not iterable) %}
-      {%- do exceptions.raise_compiler_error("smart_incremental: si_compare_columns must be a list, got: " ~ si_compare_columns) -%}
+      {%- do exceptions.raise_compiler_error("(smart_incremental): si_compare_columns must be a list, got: " ~ si_compare_columns) -%}
   {% endif %}
   {%- set si_exclude_compare_columns = config.get('si_exclude_compare_columns') -%}
   {% if si_exclude_compare_columns is not none and si_exclude_compare_columns and (si_exclude_compare_columns is string or si_exclude_compare_columns is not iterable) %}
-      {%- do exceptions.raise_compiler_error("smart_incremental: si_exclude_compare_columns must be a list, got: " ~ si_exclude_compare_columns) -%}
+      {%- do exceptions.raise_compiler_error("(smart_incremental): si_exclude_compare_columns must be a list, got: " ~ si_exclude_compare_columns) -%}
   {% endif %}
   {%- set si_update_predicates = config.get('si_update_predicates', none) -%}
   {%- if si_update_predicates is string -%}

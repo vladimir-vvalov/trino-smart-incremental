@@ -116,13 +116,22 @@ from {{ relation }}
         {% set _select_parts = [_key_col] if _key_col else [] %}
         {% for col in columns %}
             {% if col != _key_col %}
+                {# Support 'expr as alias' — split on ' as ' to separate expression from alias #}
+                {%- if ' as ' in col -%}
+                    {%- set _parts = col.split(' as ') -%}
+                    {%- set _col_expr = _parts | first -%}
+                    {%- set _col_alias = _parts | last -%}
+                {%- else -%}
+                    {%- set _col_expr = col -%}
+                    {%- set _col_alias = col -%}
+                {%- endif -%}
                 {% if agg_type == 'min' %}
-                    {% do _select_parts.append('min(' ~ col ~ ') as min_' ~ col) %}
+                    {% do _select_parts.append('min(' ~ _col_expr ~ ') as min_' ~ _col_alias) %}
                 {% elif agg_type == 'max' %}
-                    {% do _select_parts.append('max(' ~ col ~ ') as max_' ~ col) %}
+                    {% do _select_parts.append('max(' ~ _col_expr ~ ') as max_' ~ _col_alias) %}
                 {% else %}
-                    {% do _select_parts.append('min(' ~ col ~ ') as min_' ~ col) %}
-                    {% do _select_parts.append('max(' ~ col ~ ') as max_' ~ col) %}
+                    {% do _select_parts.append('min(' ~ _col_expr ~ ') as min_' ~ _col_alias) %}
+                    {% do _select_parts.append('max(' ~ _col_expr ~ ') as max_' ~ _col_alias) %}
                 {% endif %}
             {% endif %}
         {% endfor %}

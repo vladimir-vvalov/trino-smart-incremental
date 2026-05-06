@@ -47,17 +47,6 @@
     {{ return(_result) }}
   {%- endif -%}
 
-  {#-- Build key expression (raw SQL, no alias — alias is in _select_expr only) --#}
-  {%- if si_key | length == 1 -%}
-    {%- set _key_expr = si_key[0] -%}
-  {%- else -%}
-    {%- set _cast_parts = [] -%}
-    {%- for _k in si_key -%}
-      {%- do _cast_parts.append('CAST(' ~ _k ~ ' AS VARCHAR)') -%}
-    {%- endfor -%}
-    {%- set _key_expr = _cast_parts | join(" || '|' || ") -%}
-  {%- endif -%}
-
   {#-- ── IN mode (default) ─────────────────────────────────────────────── --#}
   {%- set _eff_mode = si_mode if si_mode else 'in' -%}
 
@@ -98,13 +87,26 @@
   {#-- ── Range modes ───────────────────────────────────────────────────── --#}
   {%- elif _eff_mode in ('between', '>', '>=', '<', '<=') -%}
 
+    {%- if si_key | length == 1 -%}
+      {%- set _range_col = si_key[0] -%}
+      {%- set _range_alias = si_key[0] -%}
+      {%- set _key_expr = si_key[0] -%}
+    {%- else -%}
+      {%- set _cast_parts = [] -%}
+      {%- for _k in si_key -%}
+        {%- do _cast_parts.append('CAST(' ~ _k ~ ' AS VARCHAR)') -%}
+      {%- endfor -%}
+      {%- set _key_expr = _cast_parts | join(" || '|' || ") -%}
+      {%- set _range_col = _key_expr ~ ' as __si_range_key__' -%}
+      {%- set _range_alias = '__si_range_key__' -%}
+    {%- endif -%}
     {%- set _agg = smart_incremental.minmax_from_relation(
           relation = tmp_relation,
-          columns = [_key_expr],
+          columns = [_range_col],
           agg_type = 'minmax'
     ) -%}
-    {%- set _act_min = si_min if si_min is not none else _agg.get('min_' ~ _key_expr) -%}
-    {%- set _act_max = si_max if si_max is not none else _agg.get('max_' ~ _key_expr) -%}
+    {%- set _act_min = si_min if si_min is not none else _agg.get('min_' ~ _range_alias) -%}
+    {%- set _act_max = si_max if si_max is not none else _agg.get('max_' ~ _range_alias) -%}
 
     {%- if _eff_mode == 'between' -%}
       {%- if _act_min is not none and _act_max is not none -%}

@@ -8,7 +8,7 @@
     {{ get_incremental_microbatch_sql(arg_dict) }}
   {%- else -%}
     {%- set msg -%}
-      smart_incremental: unknown incremental_strategy '{{ incremental_strategy }}'.
+      (smart_incremental): unknown incremental_strategy '{{ incremental_strategy }}'.
       Supported: append, delete+insert, merge, microbatch, default.
     {%- endset -%}
     {%- do exceptions.raise_compiler_error(msg) -%}
