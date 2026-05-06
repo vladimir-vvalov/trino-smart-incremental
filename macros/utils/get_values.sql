@@ -27,16 +27,7 @@
         {{ return({}) }}
     {% endif %}
 
-    {% set _where = '' %}
-    {%- if conditions is string -%}
-        {%- set conditions = [conditions] -%}
-    {%- endif -%}
-    {% if conditions | length > 0 %}
-        {% set _where %}
-where
-    {{ conditions | join('\n    and ') }}
-        {% endset %}
-    {% endif %}
+    {% set _where = smart_incremental.build_where_clause(conditions) %}
 
     {% set _sql %}
 select distinct
@@ -112,16 +103,7 @@ from {{ relation }}
         {{ return({}) }}
     {% endif %}
 
-    {% set _where = '' %}
-    {%- if conditions is string -%}
-        {%- set conditions = [conditions] -%}
-    {%- endif -%}
-    {% if conditions | length > 0 %}
-        {% set _where %}
-where
-    {{ conditions | join('\n    and ') }}
-        {% endset %}
-    {% endif %}
+    {% set _where = smart_incremental.build_where_clause(conditions) %}
 
     {#-- Build SELECT list and optional GROUP BY (single unified block) --#}
     {% if row_name_by == '__index__' %}
@@ -134,13 +116,22 @@ where
         {% set _select_parts = [_key_col] if _key_col else [] %}
         {% for col in columns %}
             {% if col != _key_col %}
+                {# Support 'expr as alias' — split on ' as ' to separate expression from alias #}
+                {%- if ' as ' in col -%}
+                    {%- set _parts = col.split(' as ') -%}
+                    {%- set _col_expr = _parts | first -%}
+                    {%- set _col_alias = _parts | last -%}
+                {%- else -%}
+                    {%- set _col_expr = col -%}
+                    {%- set _col_alias = col -%}
+                {%- endif -%}
                 {% if agg_type == 'min' %}
-                    {% do _select_parts.append('min(' ~ col ~ ') as min_' ~ col) %}
+                    {% do _select_parts.append('min(' ~ _col_expr ~ ') as min_' ~ _col_alias) %}
                 {% elif agg_type == 'max' %}
-                    {% do _select_parts.append('max(' ~ col ~ ') as max_' ~ col) %}
+                    {% do _select_parts.append('max(' ~ _col_expr ~ ') as max_' ~ _col_alias) %}
                 {% else %}
-                    {% do _select_parts.append('min(' ~ col ~ ') as min_' ~ col) %}
-                    {% do _select_parts.append('max(' ~ col ~ ') as max_' ~ col) %}
+                    {% do _select_parts.append('min(' ~ _col_expr ~ ') as min_' ~ _col_alias) %}
+                    {% do _select_parts.append('max(' ~ _col_expr ~ ') as max_' ~ _col_alias) %}
                 {% endif %}
             {% endif %}
         {% endfor %}
@@ -204,6 +195,22 @@ from {{ relation }}
         conditions = conditions,
         is_quoting = is_quoting
     )) }}
+{% endmacro %}
+
+
+{#-- Normalises conditions to a list and builds a WHERE clause string.
+  Returns '' when conditions is empty.
+--#}
+{% macro build_where_clause(conditions) %}
+    {%- if conditions is string -%}
+        {%- set conditions = [conditions] -%}
+    {%- endif -%}
+    {%- if conditions | length > 0 -%}
+        {%- set _clause %}where
+    {{ conditions | join('\n    and ') }}{%- endset -%}
+        {{ return(_clause) }}
+    {%- endif -%}
+    {{ return('') }}
 {% endmacro %}
 
 
@@ -359,11 +366,7 @@ from {{ relation }}
     {% endif %}
 
     {#-- Skip if table does not exist --#}
-    {% if not smart_incremental.check_table(
-            model_name = relation.identifier,
-            schema_name = relation.schema,
-            database_name = relation.database
-    ) %}
+    {% if not smart_incremental.check_relation(relation) %}
         {{ return({}) }}
     {% endif %}
 

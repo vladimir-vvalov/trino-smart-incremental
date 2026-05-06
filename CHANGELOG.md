@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.0 - (2026-05-06)
+
+### Added
+
+- README with full documentation: configuration reference, strategy descriptions, and utility macro guide.
+- Validation: compiler error when `si_mode` is set but `si_key` (and `unique_key`) is absent.
+
+---
+
+## 0.0.4 - (2026-05-06)
+
+### Fixed
+
+- Range modes for `delete+insert` — fixed generated invalid SQL alias.
+
+---
+
+## 0.0.3 - (2026-05-06)
+
+### Fixed
+
+- `si_min` / `si_max` — values are now correctly read via `config.get`
+- Range mode — fixed undefined `_dbt_alias` variable used for MIN/MAX aliases
+
+### Changed
+
+- Code cleanup and deduplication; removed redundant intermediate variables
+- `temporary_helpers.sql` renamed to `helpers.sql`
+- New `build_where_clause(conditions)` macro extracted from duplicated logic
+
+---
+
 ## 0.0.2 - (2026-05-05)
 
 ### Changed
