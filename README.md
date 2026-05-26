@@ -119,12 +119,12 @@ packages:
     name: 'trino-smart-incremental'
 ```
 
-Or via git ref:
+Or from the `main` branch (latest unreleased):
 
 ```yaml
 packages:
   - git: "https://github.com/vladimir-vvalov/trino-smart-incremental.git"
-    revision: v0.1.1
+    revision: main
 ```
 
 Then run:
