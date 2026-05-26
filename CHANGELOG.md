@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.1 - (2026-05-26)
+
+### Added
+
+- `cleanup_snapshot_tmp()` macro: drops the `__dbt_tmp` staging table before each snapshot run, preventing `TABLE_ALREADY_EXISTS` errors caused by leftover temp tables after Trino failures. Workaround for [starburstdata/dbt-trino#488](https://github.com/starburstdata/dbt-trino/issues/488), pending [starburstdata/dbt-trino#489](https://github.com/starburstdata/dbt-trino/pull/489).
+
+---
+
 ## 0.1.0 - (2026-05-06)
 
 ### Added

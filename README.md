@@ -19,6 +19,7 @@ Custom incremental materialization for dbt-trino with enhanced filtering, typed 
   - [append](#append)
   - [delete+insert](#deleteinsert)
   - [merge](#merge)
+- [Snapshots](#snapshots)
 - [Utilities](#utilities)
 - [Requirements](#requirements)
 - [Changelog](#changelog)
@@ -114,7 +115,7 @@ Add to your `packages.yml`:
 
 ```yaml
 packages:
-  - tarball: https://github.com/vladimir-vvalov/trino-smart-incremental/archive/refs/tags/0.1.0.tar.gz
+  - tarball: https://github.com/vladimir-vvalov/trino-smart-incremental/archive/refs/tags/0.1.1.tar.gz
     name: 'trino-smart-incremental'
 ```
 
@@ -123,7 +124,7 @@ Or via git ref:
 ```yaml
 packages:
   - git: "https://github.com/vladimir-vvalov/trino-smart-incremental.git"
-    revision: v0.1.0
+    revision: v0.1.1
 ```
 
 Then run:
@@ -183,7 +184,7 @@ associate them with this package. Standard parameters are not affected when swit
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `si_key` | string / list | `none` | Column(s) used to filter the target table before insert. This is the primary filter key for `delete+insert`. You may use `unique_key` instead -- both are treated identically for this purpose. Semantically, `si_key` is more accurate: in `delete+insert` the key column is a slice or partition key, not necessarily a row-identity key the way `unique_key` implies. |
+| `si_key` | string / list | `none` | Column(s) used to filter the target table before insert. This is the primary filter key for `delete+insert`. You may use `unique_key` instead -- both are treated identically for this purpose. Semantically, `si_key` is more accurate: in `delete+insert` the key column is a slice key (e.g. a date range), not necessarily a row-identity key the way `unique_key` implies. |
 | `si_mode` | string | `none` | Filtering mode for `delete+insert`: `'in'`, `'between'`, `'>'`, `'>='`, `'<'`, `'<='`. Required when using `delete+insert` strategy. In `'in'` mode, rows where any `si_key` column is NULL are excluded from the value set (NULL cannot match `IN (...)` in SQL). |
 | `si_min` | string / number | `none` | Lower bound for range modes (`between`, `>`, `>=`). If not set, read as `MIN(si_key)` from the temp relation. |
 | `si_max` | string / number | `none` | Upper bound for range modes (`between`, `<`, `<=`). If not set, read as `MAX(si_key)` from the temp relation. |
@@ -279,6 +280,20 @@ WHEN NOT MATCHED THEN INSERT (id, value, ...) VALUES (...)
 Multiple predicates (passed as a list) are joined with `AND`.
 
 `incremental_predicates` continues to work on the JOIN condition, same as in the standard implementation.
+
+---
+
+## Snapshots
+
+### `smart_incremental.cleanup_snapshot_tmp()`
+
+Drops `__dbt_tmp` before each snapshot run. Workaround for [starburstdata/dbt-trino#488](https://github.com/starburstdata/dbt-trino/issues/488) — Trino leaves the staging table behind after a failed run, and [PR #489](https://github.com/starburstdata/dbt-trino/pull/489) fixing this has been open for over a year.
+
+```yaml
+snapshots:
+  your_project_name:
+    +pre-hook: "{{ smart_incremental.cleanup_snapshot_tmp() }}"
+```
 
 ---
 
