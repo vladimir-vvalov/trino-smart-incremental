@@ -19,7 +19,6 @@ Custom incremental materialization for dbt-trino with enhanced filtering, typed 
   - [append](#append)
   - [delete+insert](#deleteinsert)
   - [merge](#merge)
-- [Snapshots](#snapshots)
 - [Utilities](#utilities)
 - [Requirements](#requirements)
 - [Changelog](#changelog)
@@ -115,7 +114,7 @@ Add to your `packages.yml`:
 
 ```yaml
 packages:
-  - tarball: https://github.com/vladimir-vvalov/trino-smart-incremental/archive/refs/tags/0.1.1.tar.gz
+  - tarball: https://github.com/vladimir-vvalov/trino-smart-incremental/archive/refs/tags/0.1.2.tar.gz
     name: 'trino-smart-incremental'
 ```
 
@@ -280,20 +279,6 @@ WHEN NOT MATCHED THEN INSERT (id, value, ...) VALUES (...)
 Multiple predicates (passed as a list) are joined with `AND`.
 
 `incremental_predicates` continues to work on the JOIN condition, same as in the standard implementation.
-
----
-
-## Snapshots
-
-### `smart_incremental.cleanup_snapshot_tmp()`
-
-Drops `__dbt_tmp` before each snapshot run. Workaround for [starburstdata/dbt-trino#488](https://github.com/starburstdata/dbt-trino/issues/488) — Trino leaves the staging table behind after a failed run, and [PR #489](https://github.com/starburstdata/dbt-trino/pull/489) fixing this has been open for over a year.
-
-```yaml
-snapshots:
-  your_project_name:
-    +pre-hook: "{{ smart_incremental.cleanup_snapshot_tmp() }}"
-```
 
 ---
 
