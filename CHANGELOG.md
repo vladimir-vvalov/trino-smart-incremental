@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.2 - (2026-05-27)
+
+### Removed
+
+- `cleanup_snapshot_tmp()` macro: dropped from the package. Snapshot support for Trino has additional blocking issues beyond the `TABLE_ALREADY_EXISTS` workaround, making reliable snapshot usage impractical at this time.
+
+---
+
 ## 0.1.1 - (2026-05-26)
 
 ### Added
