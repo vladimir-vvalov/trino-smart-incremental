@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.1.3 - (2026-08-17)
+
+### Added
+
+- `si_get_metaconfig(key, default)` macro: version-safe config accessor (reads `config.meta` first, falls back to top-level `config.get`). Resolves `on_table_exists` and `views_enabled` regardless of placement, keeping the package compatible with dbt-core 1.10 / 1.11 / 1.12 as custom keys migrate into `config.meta` (`CustomKeyInConfigDeprecation`).
+
+### Changed
+
+- `on_table_exists` and `views_enabled` are now read via `si_get_metaconfig` instead of `config.get`.
+
+---
+
 ## 0.1.2 - (2026-05-27)
 
 ### Removed
