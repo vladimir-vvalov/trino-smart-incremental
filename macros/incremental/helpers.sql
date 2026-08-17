@@ -1,6 +1,6 @@
 {% macro get_incremental_tmp_relation_type(strategy, si_key, language) %}
 
-  {%- set views_enabled = config.get('views_enabled', true) -%}
+  {%- set views_enabled = smart_incremental.si_get_metaconfig('views_enabled', true) -%}
 
   {% if language == 'sql' and (views_enabled and (strategy in ('default', 'append', 'merge') or (si_key is none))) %}
     {{ return('view') }}

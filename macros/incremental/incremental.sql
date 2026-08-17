@@ -5,7 +5,7 @@
   {%- set full_refresh_mode = (should_full_refresh()) -%}
   {%- set on_schema_change = incremental_validate_on_schema_change(config.get('on_schema_change'), default='ignore') -%}
   {%- set language = model['language'] -%}
-  {%- set on_table_exists = config.get('on_table_exists', 'rename') -%}
+  {%- set on_table_exists = smart_incremental.si_get_metaconfig('on_table_exists', 'rename') -%}
   {% if on_table_exists not in ['rename', 'drop', 'replace'] %}
       {%- do log('Invalid value for on_table_exists (%s) specified. Setting default value (%s).' % (on_table_exists, 'rename')) -%}
       {%- set on_table_exists = 'rename' -%}
