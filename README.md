@@ -99,6 +99,15 @@ WHEN MATCHED AND (status != 'locked') THEN UPDATE SET ...
 When `si_mode = 'in'` is used with a key column that may contain NULLs, `si_null_key` controls behavior:
 `warn` (default), `error`, or `ignore`.
 
+### Key Type Guard for `si_mode = 'in'`
+
+In `si_mode = 'in'`, the DELETE list is built from DISTINCT `si_key` values. High-cardinality or
+imprecise column types (`timestamp`, `time`, `double`, `real`, `decimal`) produce a huge/slow
+`IN(...)` list or hit `si_in_rows_limit` (silent duplicates). `smart_incremental` blocks such types
+**before** the DISTINCT query runs, so no work is wasted. `si_key_wrong_type` controls the policy:
+`error` (default), `warn`, or `ignore`. Range modes (`between` / `>` / `>=` / `<` / `<=`) are
+unaffected. See [delete+insert](#deleteinsert) for details.
+
 ### Custom `is_incremental()` Check
 
 The standard dbt `is_incremental()` hardcodes `materialized == 'incremental'` and does not recognize
@@ -118,7 +127,7 @@ Add to your `packages.yml`:
 
 ```yaml
 packages:
-  - tarball: https://github.com/vladimir-vvalov/trino-smart-incremental/archive/refs/tags/0.1.2.tar.gz
+  - tarball: https://github.com/vladimir-vvalov/trino-smart-incremental/archive/refs/tags/0.2.1.tar.gz
     name: 'trino-smart-incremental'
 ```
 
@@ -193,6 +202,7 @@ associate them with this package. Standard parameters are not affected when swit
 | `si_max` | string / number | `none` | Upper bound for range modes (`between`, `<`, `<=`). If not set, read as `MAX(si_key)` from the temp relation. |
 | `si_update_predicates` | string / list | `none` | Additional condition(s) for `WHEN MATCHED` in `merge`. Joined with `AND`. Ignored silently when using standard `incremental`. |
 | `si_null_key` | string | `'warn'` | Behavior when NULL values are found among `si_key` values in `si_mode = 'in'`: `'warn'` -- log a warning and continue (NULLs will not be deleted from target), `'error'` -- raise a compiler error, `'ignore'` -- silently skip. |
+| `si_key_wrong_type` | string | `'error'` | Guard for `si_mode = 'in'`: blocks high-cardinality / imprecise `si_key` column types (`timestamp` incl. `timestamp with time zone`, `time`, `double`, `real`, `decimal`) **before** the DISTINCT query runs. For a composite `si_key`, fires if at least one column has a flagged type. Such types blow up the `IN(...)` DELETE list or hit `si_in_rows_limit` (silent duplicates); use a range mode or reduce granularity (e.g. `cast(ts as date)`). Values: `'error'` (raise) / `'warn'` / `'ignore'`. Range modes are unaffected. Read via `si_get_metaconfig` (may live under `config.meta`). |
 | `si_in_rows_limit` | integer | `1000000` | Row cap applied when reading values from a relation into memory (used by utility macros). Also controls the WARNING threshold for large `IN(...)` lists. Set via model config or `vars` in `dbt_project.yml`. |
 | `si_check_update` | boolean | `false` | Skip the incremental run when the target model is already newer than **all** of its source tables (see [Skip when nothing changed](#skip-when-nothing-changed-si_check_update)). Applies to every strategy **except** `microbatch`. Read via `si_get_metaconfig` (may live under `config.meta`). |
 | `si_check_ignore` | string / list | `none` | dbt-style labels of upstreams to **exclude** from the freshness comparison. Source: `'<source_name>.<table>'` (as in `source('hermes','dbo__activities')`); model/seed/snapshot: plain `'<name>'`. See [Excluding sources](#excluding-sources-si_check_ignore). |
@@ -255,6 +265,26 @@ from the temp relation automatically. Set them explicitly (e.g. via `var()`) to 
 Rows with a NULL in any `si_key` column are excluded from the value set (NULL cannot match `IN (...)`).
 The `si_null_key` parameter controls what happens when such rows are found: `'warn'` (default) -- log a
 warning and continue, `'error'` -- raise a compiler error, `'ignore'` -- skip silently.
+
+**Key type guard in value mode (`si_key_wrong_type`):**
+
+The `IN(...)` list is built from DISTINCT `si_key` values, so high-cardinality or imprecise column
+types make the DELETE list explode or overflow `si_in_rows_limit` (silent duplicates). Before the
+DISTINCT query runs, `smart_incremental` inspects the `si_key` column types and blocks the flagged
+ones -- `timestamp` (incl. `timestamp with time zone`), `time`, `double`, `real`, `decimal`:
+
+```sql
+-- si_key = ['fil_id', 'lot_kolvo', 'event_ts'], si_mode = 'in'
+-- => Compilation Error, before any DISTINCT query:
+-- (smart_incremental): si_mode='in' with high-cardinality/imprecise si_key column type(s):
+--   lot_kolvo (decimal(18,3)), event_ts (timestamp(6) with time zone).
+```
+
+For a composite `si_key`, the guard fires if **at least one** column has a flagged type, and the
+message lists every offending column with its type. `si_key_wrong_type` sets the policy: `'error'`
+(default) raises, `'warn'` logs and continues, `'ignore'` disables the check. The remedy is a range
+mode (`si_mode = 'between'` / `'>='` / ...) or reducing granularity (e.g. `cast(ts as date)`). Range
+modes never trigger this guard -- they use `MIN` / `MAX`, not a value list.
 
 **`incremental_predicates` interaction:**
 

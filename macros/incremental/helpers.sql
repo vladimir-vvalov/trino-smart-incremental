@@ -52,6 +52,11 @@
 
   {%- if _eff_mode == 'in' -%}
 
+    {#-- Guard BEFORE the distinct query runs: block high-cardinality/imprecise
+         key types (timestamp/time/double/real/decimal) that would blow up the
+         IN(...) list. Policy via si_key_wrong_type (default 'error'). --#}
+    {%- do smart_incremental.check_si_key_types(si_key, dest_columns) -%}
+
     {%- if si_key | length > 1 -%}
       {#-- Composite key: (col1 = v1 and col2 = v2) or (col1 = v11 and col2 = v12) ...
            No CAST — each column stays typed, enabling predicate pushdown. --#}
@@ -125,6 +130,83 @@
   {%- endif -%}
 
   {{ return(_result) }}
+{% endmacro %}
+
+
+{#--
+  check_si_key_types
+
+  Guard for si_mode='in': the IN-list is built from DISTINCT si_key values, so
+  high-cardinality / imprecise column types blow up the IN(...) list (huge/slow
+  DELETE) or hit si_in_rows_limit (silent duplicates). This macro blocks such
+  types BEFORE the distinct query runs — no wasted work.
+
+  Checked types (any si_key column matching → policy fires):
+    timestamp (incl. 'timestamp with time zone'), time, double, real, decimal
+
+  Composite si_key: fires if AT LEAST ONE column has a flagged type.
+
+  Only meaningful for si_mode='in' — the caller must gate on that; range modes
+  (between/>/>=/</<=) use MIN/MAX and are unaffected.
+
+  Policy — si_key_wrong_type (via si_get_metaconfig):
+    'error'  -> raise_compiler_error   [default]
+    'warn'   -> exceptions.warn
+    'ignore' -> no-op
+
+  Params:
+    si_key        – list of key column names (already normalised to list)
+    dest_columns  – list of column objects (have .name and .data_type)
+--#}
+{% macro check_si_key_types(si_key, dest_columns) %}
+  {%- set _policy = smart_incremental.si_get_metaconfig('si_key_wrong_type', 'error') -%}
+  {%- if _policy == 'ignore' -%}
+    {{ return(none) }}
+  {%- endif -%}
+  {%- if _policy not in ['error', 'warn', 'ignore'] -%}
+    {%- do log("Invalid value for si_key_wrong_type (%s) specified. Setting default value (%s)." % (_policy, 'error')) -%}
+    {%- set _policy = 'error' -%}
+  {%- endif -%}
+
+  {%- if not si_key or si_key | length == 0 -%}{{ return(none) }}{%- endif -%}
+  {%- if not dest_columns or dest_columns | length == 0 -%}{{ return(none) }}{%- endif -%}
+
+  {#-- substrings that flag a "dangerous for IN" type --#}
+  {%- set _bad_types = ['timestamp', 'time', 'double', 'real', 'decimal'] -%}
+
+  {#-- build lower-cased type lookup from dest_columns --#}
+  {%- set _col_types = {} -%}
+  {%- for _c in dest_columns -%}
+    {%- do _col_types.update({_c.name: _c.data_type | lower}) -%}
+  {%- endfor -%}
+
+  {#-- collect offending "col (type)" entries --#}
+  {%- set _offenders = [] -%}
+  {%- for _k in si_key -%}
+    {%- set _dtype = _col_types.get(_k, '') -%}
+    {%- set _hit = [] -%}
+    {%- for _bad in _bad_types -%}
+      {%- if _bad in _dtype -%}{%- do _hit.append(1) -%}{%- endif -%}
+    {%- endfor -%}
+    {%- if _hit | length > 0 -%}
+      {%- do _offenders.append(_k ~ ' (' ~ _dtype ~ ')') -%}
+    {%- endif -%}
+  {%- endfor -%}
+
+  {%- if _offenders | length > 0 -%}
+    {%- set _msg -%}
+(smart_incremental): si_mode='in' with high-cardinality/imprecise si_key column type(s): {{ _offenders | join(', ') }}.
+The IN(...) delete list is built from DISTINCT values of these columns, which can produce a huge/slow DELETE or hit si_in_rows_limit (silent duplicates).
+Use a range mode (si_mode='between' / '>=' / '<=' ...) for these columns, or reduce granularity (e.g. cast(ts as date)).
+To override: set si_key_wrong_type='warn' or 'ignore'.
+    {%- endset -%}
+    {%- if _policy == 'error' -%}
+      {%- do exceptions.raise_compiler_error(_msg) -%}
+    {%- else -%}
+      {%- do exceptions.warn(_msg) -%}
+    {%- endif -%}
+  {%- endif -%}
+  {{ return(none) }}
 {% endmacro %}
 
 
