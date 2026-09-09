@@ -2,9 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## 0.2.0 - (2026-09-08)
+## 0.2.1 - (2026-09-09)
 
-See the [README](README.md) for full usage details.
+### Added
+
+- `si_key_wrong_type` (string, default `'error'`): guard for `si_mode='in'` that blocks high-cardinality / imprecise `si_key` column types. Values: `'error'` / `'warn'` / `'ignore'`.
+
+---
+
+## 0.2.0 - (2026-09-08)
 
 ### Added
 
