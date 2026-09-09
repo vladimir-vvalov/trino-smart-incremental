@@ -19,6 +19,8 @@ Custom incremental materialization for dbt-trino with enhanced filtering, typed 
   - [append](#append)
   - [delete+insert](#deleteinsert)
   - [merge](#merge)
+  - [table](#table)
+- [Skip when nothing changed (si_check_update)](#skip-when-nothing-changed-si_check_update)
 - [Utilities](#utilities)
 - [Requirements](#requirements)
 - [Changelog](#changelog)
@@ -190,6 +192,8 @@ associate them with this package. Standard parameters are not affected when swit
 | `si_update_predicates` | string / list | `none` | Additional condition(s) for `WHEN MATCHED` in `merge`. Joined with `AND`. Ignored silently when using standard `incremental`. |
 | `si_null_key` | string | `'warn'` | Behavior when NULL values are found among `si_key` values in `si_mode = 'in'`: `'warn'` -- log a warning and continue (NULLs will not be deleted from target), `'error'` -- raise a compiler error, `'ignore'` -- silently skip. |
 | `si_in_rows_limit` | integer | `1000000` | Row cap applied when reading values from a relation into memory (used by utility macros). Also controls the WARNING threshold for large `IN(...)` lists. Set via model config or `vars` in `dbt_project.yml`. |
+| `si_check_update` | boolean | `false` | Skip the incremental run when the target model is already newer than **all** of its source tables (Iceberg-only; see [Skip when nothing changed](#skip-when-nothing-changed-si_check_update)). Applies to every strategy **except** `microbatch`. |
+| `si_missing_committed` | string | `'changed'` | Behaviour when a source has no resolvable `committed_at` (missing `$snapshots` or `max` is NULL): `'changed'` -- treat the source as just-changed (do **not** skip), `'unchanged'` -- ignore that source in the comparison. |
 
 ---
 
@@ -279,6 +283,81 @@ WHEN NOT MATCHED THEN INSERT (id, value, ...) VALUES (...)
 Multiple predicates (passed as a list) are joined with `AND`.
 
 `incremental_predicates` continues to work on the JOIN condition, same as in the standard implementation.
+
+### table
+
+Full-rebuild strategy. Behaves exactly like the vanilla dbt-trino `table` materialization: on every
+run the whole table is rewritten, with no temp relation and no delta logic. No `si_key` / `si_mode`
+is used.
+
+```sql
+{{ config(
+    materialized = 'smart_incremental',
+    incremental_strategy = 'table',
+    on_table_exists = 'rename'
+) }}
+
+select ... from {{ ref('source_table') }}
+```
+
+`on_table_exists` controls how an existing table is replaced:
+
+| Value | Behaviour |
+|-------|-----------|
+| `rename` (default) | build into an intermediate table, swap names, drop the old one (safest) |
+| `drop` | drop the existing table, then create |
+| `replace` | `CREATE OR REPLACE TABLE` |
+| `skip` | `CREATE TABLE IF NOT EXISTS` -- if the table already exists, Trino does not run the `SELECT` (only enabled for the `table` strategy) |
+
+The `table` strategy exists mainly so that [`si_check_update`](#skip-when-nothing-changed-si_check_update)
+can be applied to a full-rebuild model without overriding the vanilla `table` materialization.
+
+---
+
+## Skip when nothing changed (si_check_update)
+
+> **Iceberg only.** This feature relies on the Apache Iceberg `<table>$snapshots` metadata table and
+> is intended for dbt-trino models materialized on Iceberg.
+
+Set `si_check_update = true` to let a model skip its own rebuild when it is already up to date with
+respect to its sources.
+
+**How it works.** Before issuing any data query, the materialization:
+
+1. Resolves the full set of physical source tables of the model, looking transitively through
+   `ephemeral` and `view` nodes down to the underlying tables and sources.
+2. Compares, in a single Trino query, the newest `committed_at` of the model (`{{ this }}$snapshots`)
+   against the newest `committed_at` across all source `$snapshots`.
+3. If the model is strictly newer than every source, the run is **skipped**: no delete, no merge, no
+   insert, no schema-change queries. A no-op `main` (`CREATE TABLE IF NOT EXISTS`) is issued so Trino
+   runs nothing, and the run is reported as successful.
+
+The check only runs on a genuine incremental run of an existing table -- it is not evaluated on the
+first run, under `--full-refresh`, on a view, or for the `microbatch` strategy. `pre_hooks` and
+`post_hooks` always run, whether or not the update is skipped.
+
+```sql
+{{ config(
+    materialized = 'smart_incremental',
+    incremental_strategy = 'table',
+    si_check_update = true
+) }}
+
+select ... from {{ ref('upstream_model') }}
+```
+
+**Comparison timing.** All `committed_at` values are compared inside Trino as UTC timestamps; the
+package does not parse timestamps in Jinja.
+
+**Missing freshness (`si_missing_committed`).** If a source has no resolvable `committed_at` (e.g. it
+has not been built yet, or is not an Iceberg table), the default `si_missing_committed = 'changed'`
+treats it as just-changed and the run is **not** skipped (the safe choice). Set
+`si_missing_committed = 'unchanged'` to ignore such sources in the comparison. If the model itself has
+no resolvable `committed_at`, the run is never skipped.
+
+**Custom config keys.** `si_check_update` and `si_missing_committed` are read via `si_get_metaconfig`,
+so they may be placed either at the top level of `config` or under `config.meta` (recommended on
+dbt-core 1.11+ to avoid `CustomKeyInConfigDeprecation`).
 
 ---
 

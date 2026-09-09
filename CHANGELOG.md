@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.0 - (2026-09-08)
+
+### Added
+
+- **`incremental_strategy = 'table'`**: full-rebuild strategy that behaves like the vanilla dbt-trino `table` materialization. No temp relation and no delta — the whole table is rewritten via the shared `on_table_exists_logic` helper. Supports `on_table_exists` values `rename` / `drop` / `replace` / `skip` (the `skip` mode is enabled only for this strategy, matching vanilla `table`). Added so that `si_check_update` can be applied uniformly without touching the vanilla materialization.
+- **`si_check_update` (bool, default `false`)**: skips an incremental run when the target model is already newer than every one of its source tables. Freshness is read from Apache Iceberg `<table>$snapshots.committed_at`. The check runs only on a genuine incremental run of an existing table (not the first run, not `--full-refresh`, not a view) and is ignored for the `microbatch` strategy. It is evaluated **before** `pre_hooks`, and when it decides to skip: `pre_hooks` are skipped and a no-op `main` (`select 1 where false`) is issued so the target table — data and Iceberg snapshots alike — is left completely untouched (a `pre_hook` mutating `{{ this }}` would otherwise bump the target's `committed_at` and make the check skip forever).
+- **`--full-refresh` + `on_table_exists='skip'`**: under a full refresh, `on_table_exists='skip'` is overridden to `'rename'` so the table is actually rebuilt (plain `CREATE TABLE IF NOT EXISTS` would leave an existing table untouched). This gap exists in vanilla dbt-trino; fixed in `smart_incremental` only.
+- **`si_check_ignore` (string / list, default none)**: a flat list of dbt-style labels to EXCLUDE from the freshness comparison. Source form is `'<source_name>.<table>'` (mirrors `source('hermes','dbo__activities')`); model/seed/snapshot form is the plain `'<name>'`. A dot always denotes a source (dbt forbids dots in resource names, so there is no collision). Ignored nodes are dropped entirely — their own upstreams are NOT descended into. Useful when a noisy but insignificant upstream (e.g. a frequently-rebuilt intermediate) would otherwise defeat the skip. Entries that match nothing raise a warning (typo guard).
+- **`si_missing_committed` (string, default `'changed'`)**: controls behaviour when a source has no resolvable change timestamp (missing metadata table or `max` is NULL). `'changed'` treats the source as just-changed (do not skip); `'unchanged'` ignores it in the comparison. Named without the word *snapshot* to avoid confusion with the dbt `snapshot` resource.
+- **`si_table_format` (source/model meta, default `'iceberg'`)**: per-source declared metadata format used to read freshness — `'iceberg'` → `<id>$snapshots`.max(`committed_at`), `'delta'` → `<id>$history`.max(`timestamp`). Any other value marks the source unreadable (handled per `si_missing_committed`).
+- `resolve_source_tables(node, ignore)` macro: resolves the full set of physical source tables feeding a model, looking transitively through `ephemeral` and `view` nodes down to tables/sources/seeds/snapshots. Each result carries a dbt-style `label` used for `si_check_ignore` matching and for logging.
+- `si_should_skip_update()` / `si_freshness_select()` / `si_snapshots_relation()` macros: single-query, Trino-side comparison of the latest change timestamp between the target and its sources.
+- **File-only diagnostic log**: before the freshness query, `smart_incremental` writes (at DEBUG level, i.e. to `logs/dbt.log` only, never the terminal) a copy-paste-ready list of the sources being `checking:` and the `ignored:` labels — an author hint for tuning `si_check_ignore`. Costs no extra queries (walks the already-resolved list in memory).
+
+### Changed
+
+- **Skip logging moved off the terminal**: the `SKIPPING update ...` message is now DEBUG (file-only). In the terminal the run status alone conveys the outcome — `SUCCESS` means the update was skipped by `si_check_update`, `CREATE TABLE (N rows)` means a real write.
+
+### Fixed
+
+- **Redundant temp-relation drop**: `drop_relation_if_exists(tmp_relation)` was executed unconditionally for every branch, but only the delta path ever creates `__dbt_tmp`. The drop is now scoped to the delta branch, removing a wasted metastore round-trip on the `table` / full-refresh / first-run / view / skip paths.
+
+---
+
 ## 0.1.3 - (2026-08-17)
 
 ### Added

@@ -6,10 +6,18 @@
     {{ smart_incremental.get_merge_sql(arg_dict) }}
   {%- elif incremental_strategy == 'microbatch' -%}
     {{ get_incremental_microbatch_sql(arg_dict) }}
+  {%- elif incremental_strategy == 'table' -%}
+    {#-- `table` is a full-rebuild strategy handled entirely inside the materialization
+         (via on_table_exists_logic); it never produces delta SQL and must not reach
+         this router. Reaching here indicates a wiring bug. --#}
+    {%- do exceptions.raise_compiler_error(
+        "(smart_incremental): incremental_strategy 'table' is handled by the "
+        ~ "materialization, not by get_incremental_sql(). This is an internal error."
+    ) -%}
   {%- else -%}
     {%- set msg -%}
       (smart_incremental): unknown incremental_strategy '{{ incremental_strategy }}'.
-      Supported: append, delete+insert, merge, microbatch, default.
+      Supported: append, delete+insert, merge, microbatch, table, default.
     {%- endset -%}
     {%- do exceptions.raise_compiler_error(msg) -%}
   {%- endif -%}
