@@ -80,7 +80,7 @@
         {% set _rel = api.Relation.create(
             database=_src.database, schema=_src.schema, identifier=_src.identifier
         ) %}
-        {% if _fmt == 'unknown' or not smart_incremental.check_relation(_rel) %}
+        {% if _fmt == 'none' or not smart_incremental.check_relation(_rel) %}
             {% set _has_missing.val = true %}
         {% else %}
             {% do _existing_sources.append(_src) %}
@@ -177,9 +177,14 @@
   these reads do not scan data. The result column is always aliased `m` so the
   caller can UNION ALL sources of mixed formats and take a global max(m).
 
+  `si_table_format = 'none'` means "no readable change timestamp"; such sources are
+  filtered out by the caller before reaching this macro (handled by
+  si_missing_committed), so this macro only ever sees 'iceberg' or 'delta'. Any
+  unexpected value falls back to 'iceberg'.
+
   Params:
     relation     – source Relation
-    table_format – 'iceberg' (default) | 'delta'
+    table_format – 'iceberg' (default) | 'delta'  ('none' handled upstream)
 --#}
 {% macro si_freshness_select(relation, table_format='iceberg') %}
     {%- set _db = relation.database -%}

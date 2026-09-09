@@ -21,6 +21,8 @@ Custom incremental materialization for dbt-trino with enhanced filtering, typed 
   - [merge](#merge)
   - [table](#table)
 - [Skip when nothing changed (si_check_update)](#skip-when-nothing-changed-si_check_update)
+  - [Excluding sources (si_check_ignore)](#excluding-sources-si_check_ignore)
+  - [Non-Iceberg sources (si_table_format)](#non-iceberg-sources-si_table_format)
 - [Utilities](#utilities)
 - [Requirements](#requirements)
 - [Changelog](#changelog)
@@ -192,8 +194,10 @@ associate them with this package. Standard parameters are not affected when swit
 | `si_update_predicates` | string / list | `none` | Additional condition(s) for `WHEN MATCHED` in `merge`. Joined with `AND`. Ignored silently when using standard `incremental`. |
 | `si_null_key` | string | `'warn'` | Behavior when NULL values are found among `si_key` values in `si_mode = 'in'`: `'warn'` -- log a warning and continue (NULLs will not be deleted from target), `'error'` -- raise a compiler error, `'ignore'` -- silently skip. |
 | `si_in_rows_limit` | integer | `1000000` | Row cap applied when reading values from a relation into memory (used by utility macros). Also controls the WARNING threshold for large `IN(...)` lists. Set via model config or `vars` in `dbt_project.yml`. |
-| `si_check_update` | boolean | `false` | Skip the incremental run when the target model is already newer than **all** of its source tables (Iceberg-only; see [Skip when nothing changed](#skip-when-nothing-changed-si_check_update)). Applies to every strategy **except** `microbatch`. |
-| `si_missing_committed` | string | `'changed'` | Behaviour when a source has no resolvable `committed_at` (missing `$snapshots` or `max` is NULL): `'changed'` -- treat the source as just-changed (do **not** skip), `'unchanged'` -- ignore that source in the comparison. |
+| `si_check_update` | boolean | `false` | Skip the incremental run when the target model is already newer than **all** of its source tables (see [Skip when nothing changed](#skip-when-nothing-changed-si_check_update)). Applies to every strategy **except** `microbatch`. Read via `si_get_metaconfig` (may live under `config.meta`). |
+| `si_check_ignore` | string / list | `none` | dbt-style labels of upstreams to **exclude** from the freshness comparison. Source: `'<source_name>.<table>'` (as in `source('hermes','dbo__activities')`); model/seed/snapshot: plain `'<name>'`. See [Excluding sources](#excluding-sources-si_check_ignore). |
+| `si_missing_committed` | string | `'changed'` | Behaviour when a source has no resolvable change timestamp (missing metadata table or `max` is NULL): `'changed'` -- treat the source as just-changed (do **not** skip), `'unchanged'` -- ignore that source in the comparison. |
+| `si_table_format` | string | `'iceberg'` | Per-source **meta** key declaring which metadata table carries the change timestamp: `'iceberg'` → `<table>$snapshots.committed_at`, `'delta'` → `<table>$history.timestamp`, `'none'` → no readable timestamp (handled by `si_missing_committed`). See [Non-Iceberg sources](#non-iceberg-sources-si_table_format). |
 
 ---
 
@@ -316,8 +320,9 @@ can be applied to a full-rebuild model without overriding the vanilla `table` ma
 
 ## Skip when nothing changed (si_check_update)
 
-> **Iceberg only.** This feature relies on the Apache Iceberg `<table>$snapshots` metadata table and
-> is intended for dbt-trino models materialized on Iceberg.
+> **Iceberg (and Delta) only.** Freshness is read from an Iceberg `<table>$snapshots` metadata table
+> (or a Delta `<table>$history`; see [si_table_format](#non-iceberg-sources-si_table_format)). This
+> feature is intended for dbt-trino models materialized on Iceberg.
 
 Set `si_check_update = true` to let a model skip its own rebuild when it is already up to date with
 respect to its sources.
@@ -329,12 +334,12 @@ respect to its sources.
 2. Compares, in a single Trino query, the newest `committed_at` of the model (`{{ this }}$snapshots`)
    against the newest `committed_at` across all source `$snapshots`.
 3. If the model is strictly newer than every source, the run is **skipped**: no delete, no merge, no
-   insert, no schema-change queries. A no-op `main` (`CREATE TABLE IF NOT EXISTS`) is issued so Trino
-   runs nothing, and the run is reported as successful.
+   insert, no schema-change queries. A no-op `main` (`select 1 where false`) is issued so the target
+   table — data and Iceberg snapshots alike — is left completely untouched, and the run is reported as
+   successful.
 
 The check only runs on a genuine incremental run of an existing table -- it is not evaluated on the
-first run, under `--full-refresh`, on a view, or for the `microbatch` strategy. `pre_hooks` and
-`post_hooks` always run, whether or not the update is skipped.
+first run, under `--full-refresh`, on a view, or for the `microbatch` strategy.
 
 ```sql
 {{ config(
@@ -346,18 +351,96 @@ first run, under `--full-refresh`, on a view, or for the `microbatch` strategy. 
 select ... from {{ ref('upstream_model') }}
 ```
 
-**Comparison timing.** All `committed_at` values are compared inside Trino as UTC timestamps; the
-package does not parse timestamps in Jinja.
+**Hooks.** The skip decision is made **before** `pre_hooks`. When the run is skipped, `pre_hooks` are
+**not** executed — this is deliberate: a `pre_hook` that mutates `{{ this }}` (e.g. `delete from {{ this }} ...`)
+would commit a fresh Iceberg snapshot, bumping the target's `committed_at` so the check would see the
+table as newer than its sources and skip forever. `post_hooks` always run.
 
-**Missing freshness (`si_missing_committed`).** If a source has no resolvable `committed_at` (e.g. it
-has not been built yet, or is not an Iceberg table), the default `si_missing_committed = 'changed'`
+**Run status.** The skip is reported as a normal success. In the terminal the status alone tells the
+story: `SUCCESS` means the update was skipped by `si_check_update`; `CREATE TABLE (N rows)` (or
+`INSERT (N rows)`) means a real write happened. The detailed `SKIPPING ...` message and the list of
+checked/ignored sources are written to `logs/dbt.log` only (DEBUG level), never the terminal.
+
+**Comparison timing.** All change timestamps are compared inside Trino as UTC values; the package does
+not parse timestamps in Jinja.
+
+**Missing freshness (`si_missing_committed`).** If a source has no resolvable change timestamp (e.g. it
+has not been built yet, or its metadata table is absent), the default `si_missing_committed = 'changed'`
 treats it as just-changed and the run is **not** skipped (the safe choice). Set
 `si_missing_committed = 'unchanged'` to ignore such sources in the comparison. If the model itself has
-no resolvable `committed_at`, the run is never skipped.
+no resolvable change timestamp, the run is never skipped.
 
-**Custom config keys.** `si_check_update` and `si_missing_committed` are read via `si_get_metaconfig`,
-so they may be placed either at the top level of `config` or under `config.meta` (recommended on
-dbt-core 1.11+ to avoid `CustomKeyInConfigDeprecation`).
+**Interaction with `--full-refresh`.** A full refresh always rebuilds the table (the skip check is not
+evaluated). For the [`table`](#table) strategy specifically, `on_table_exists = 'skip'` is overridden
+to `'rename'` under `--full-refresh` so the table is actually rebuilt (vanilla dbt-trino leaves it
+untouched — this gap is fixed in `smart_incremental` only).
+
+**Custom config keys.** `si_check_update`, `si_check_ignore`, `si_missing_committed` are read via
+`si_get_metaconfig`, so they may be placed either at the top level of `config` or under `config.meta`
+(recommended on dbt-core 1.11+ to avoid `CustomKeyInConfigDeprecation`).
+
+### Excluding sources (si_check_ignore)
+
+Sometimes an upstream changes often but is not meaningful for freshness (for example a frequently
+rebuilt intermediate table that a mart joins to for lookups only). Listing it in `si_check_ignore`
+removes it from the comparison, so the skip decision depends only on the sources that matter.
+
+`si_check_ignore` is a flat list of **dbt-style labels**:
+
+- **source** — `'<source_name>.<table>'`, exactly as you reference it with
+  `source('<source_name>', '<table>')` (the physical database/schema is resolved automatically);
+- **model / seed / snapshot** — the plain `'<name>'`.
+
+A dot always denotes a source: dbt forbids dots in resource names, so a model name can never collide
+with the `source_name.table` form.
+
+```sql
+{{ config(
+    materialized = 'smart_incremental',
+    incremental_strategy = 'table',
+    si_check_update = true,
+    si_check_ignore = [
+        'assembly_rollcage_int__lager_commodity',   -- a model: excluded by name
+        'hermes.dbo__activities',                    -- a source: source_name.table
+    ]
+) }}
+```
+
+An ignored node is dropped **entirely** — its own upstreams are not descended into. If a label matches
+nothing, a warning is raised (typo guard). If every source ends up excluded, the run is not skipped.
+
+**Finding what to ignore.** Before the freshness query, the package logs (to `logs/dbt.log` only) the
+list of sources being checked and the ones ignored, in the exact dbt-style form — ready to copy
+straight into `si_check_ignore`:
+
+```
+(smart_incremental) si_check_update [assembly_rollcage_mart__fct_holes]
+  checking: hermes.dbo__activities, assembly_rollcage_int__lager_commodity
+  ignored:  assembly_rollcage_int__lager_commodity
+```
+
+### Non-Iceberg sources (si_table_format)
+
+Freshness is read from a metadata table whose shape depends on the source's format. Declare the format
+in the **source's `meta`** (or a model's `meta`) via `si_table_format`:
+
+| `si_table_format` | Freshness read from |
+|-------------------|---------------------|
+| `iceberg` (default) | `<table>$snapshots` — `max(committed_at)` |
+| `delta` | `<table>$history` — `max(timestamp)` |
+| `none` | no readable change timestamp → source handled by `si_missing_committed` |
+
+```yaml
+# models/_sources/hermes.yml
+sources:
+  - name: hermes
+    database: common
+    schema: hermes
+    meta:
+      si_table_format: iceberg   # or 'delta'
+    tables:
+      - name: dbo__activities
+```
 
 ---
 
