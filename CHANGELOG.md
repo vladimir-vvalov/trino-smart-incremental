@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.0 - (2026-09-08)
+
+See the [README](README.md) for full usage details.
+
+### Added
+
+- `incremental_strategy = 'table'`: full-rebuild strategy matching the vanilla dbt-trino `table` (supports `on_table_exists` `rename` / `drop` / `replace` / `skip`). Under `--full-refresh`, `on_table_exists='skip'` is treated as `'rename'` so the table is still rebuilt.
+- `si_check_update` (bool, default `false`): skips a run when the target is already newer than all its sources (via Iceberg `$snapshots.committed_at`). Ignored for `microbatch`; not evaluated on first run, `--full-refresh`, or views. On skip, `pre_hooks` are not run and the target is left untouched (`post_hooks` still run); the terminal shows `SUCCESS` (vs `CREATE TABLE (N rows)` for a real write), with a DEBUG-level (file-only) `SKIPPING ...` message.
+- `si_check_ignore` (string / list): exclude upstreams from the freshness check by dbt-style label (source `'<source_name>.<table>'`, model `'<name>'`).
+- `si_missing_committed` (string, default `'changed'`): behaviour when a source has no readable change timestamp — `'changed'` (do not skip) or `'unchanged'` (ignore that source).
+- `si_table_format` (source/model meta, default `'iceberg'`): freshness source — `'iceberg'` (`$snapshots`), `'delta'` (`$history`), or `'none'` (skip this source's freshness, handled by `si_missing_committed`).
+- File-only (DEBUG) diagnostic log listing the checked and ignored sources per run — a hint for tuning `si_check_ignore`.
+
+### Fixed
+
+- Scoped the `__dbt_tmp` drop to the delta branch (it only ever creates that temp relation), avoiding a redundant drop on the other branches.
+
+---
+
 ## 0.1.3 - (2026-08-17)
 
 ### Added

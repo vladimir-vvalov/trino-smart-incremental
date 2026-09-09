@@ -19,6 +19,12 @@
     use_cache=true  — cache only (adapter.get_relation)
     use_cache=false — DB only (information_schema query)
     use_cache=none  — cache first, DB on miss  [default]
+
+  Note: relies on dbt's adapter relation cache (adapter.get_relation) for the
+  cache lookup. A missing catalog resolves to "relation not found" on the cache
+  path; the information_schema fallback (use_cache=false / cache miss) will raise
+  a native Trino error if the catalog does not exist — same behaviour as a
+  vanilla `table` materialization.
 --#}
 {% macro check_table(model_name=model.name, schema_name=model.schema, database_name=model.database, use_cache=none) %}
     {{ return(adapter.dispatch('check_table', 'smart_incremental')(model_name, schema_name, database_name, use_cache)) }}
@@ -29,19 +35,6 @@
     {#-- compile-time: nothing to check --#}
     {% if not execute %}
         {{ return(false) }}
-    {% endif %}
-
-    {#-- catalog existence check: only for non-target databases --#}
-    {% if database_name != model.database %}
-        {% set catalog_check_query %}
-            select 1 as "result"
-            from "system"."metadata"."catalogs"
-            where "catalog_name" = '{{ database_name }}'
-            limit 1
-        {% endset %}
-        {% if run_query(catalog_check_query).rows | length == 0 %}
-            {{ return(false) }}
-        {% endif %}
     {% endif %}
 
     {#-- cache lookup --#}

@@ -5,12 +5,23 @@
   {%- set full_refresh_mode = (should_full_refresh()) -%}
   {%- set on_schema_change = incremental_validate_on_schema_change(config.get('on_schema_change'), default='ignore') -%}
   {%- set language = model['language'] -%}
+  {%- set incremental_strategy = config.get('incremental_strategy') or 'default' -%}
+  {#-- 'skip' is only meaningful for the full-rebuild `table` strategy (vanilla `table` supports it).
+       For the delta strategies we keep the historical set rename/drop/replace. --#}
+  {%- set _allowed_on_table_exists = ['rename', 'drop', 'replace', 'skip'] if incremental_strategy == 'table' else ['rename', 'drop', 'replace'] -%}
   {%- set on_table_exists = smart_incremental.si_get_metaconfig('on_table_exists', 'rename') -%}
-  {% if on_table_exists not in ['rename', 'drop', 'replace'] %}
+  {% if on_table_exists not in _allowed_on_table_exists %}
       {%- do log('Invalid value for on_table_exists (%s) specified. Setting default value (%s).' % (on_table_exists, 'rename')) -%}
       {%- set on_table_exists = 'rename' -%}
   {% endif %}
-  {%- set incremental_strategy = config.get('incremental_strategy') or 'default' -%}
+  {#-- --full-refresh must always rebuild the table. `on_table_exists='skip'`
+       (CREATE TABLE IF NOT EXISTS) would leave an existing table untouched, so a
+       full refresh could never actually refresh it. Vanilla dbt-trino misses this;
+       we fix it in smart_incremental only: force 'rename' under full refresh. --#}
+  {% if full_refresh_mode and on_table_exists == 'skip' %}
+      {%- do log("(smart_incremental): on_table_exists='skip' is ignored under --full-refresh; using 'rename' to rebuild the table.") -%}
+      {%- set on_table_exists = 'rename' -%}
+  {% endif %}
   {%- set incremental_predicates = config.get('predicates', none) or config.get('incremental_predicates', none) -%}
   {%- if incremental_predicates is string -%}
       {%- set incremental_predicates = [incremental_predicates] -%}
@@ -71,6 +82,32 @@
       {%- set si_null_key = 'warn' -%}
   {% endif %}
 
+  {#-- si_check_update: skip the run when {{ this }} is already newer than all sources.
+       Custom keys are read via si_get_metaconfig (config.meta first) to stay clear of
+       CustomKeyInConfigDeprecation on dbt-core 1.11+. --#}
+  {%- set si_check_update = smart_incremental.si_get_metaconfig('si_check_update', false) -%}
+  {% if si_check_update not in [true, false] %}
+      {%- do log('Invalid value for si_check_update (%s) specified. Setting default value (%s).' % (si_check_update, false)) -%}
+      {%- set si_check_update = false -%}
+  {% endif %}
+  {%- set si_missing_committed = smart_incremental.si_get_metaconfig('si_missing_committed', 'changed') -%}
+  {% if si_missing_committed not in ['changed', 'unchanged'] %}
+      {%- do log("Invalid value for si_missing_committed (%s) specified. Setting default value (%s)." % (si_missing_committed, 'changed')) -%}
+      {%- set si_missing_committed = 'changed' -%}
+  {% endif %}
+  {#-- si_check_ignore: flat list of dbt-style labels (source: '<source_name>.<table>',
+       model/seed/snapshot: '<name>') to exclude from the freshness comparison. --#}
+  {%- set si_check_ignore = smart_incremental.si_get_metaconfig('si_check_ignore', none) -%}
+  {%- if si_check_ignore is string -%}
+      {%- set si_check_ignore = [si_check_ignore] -%}
+  {%- elif not si_check_ignore -%}
+      {%- set si_check_ignore = [] -%}
+  {%- elif si_check_ignore is not iterable -%}
+      {%- do exceptions.raise_compiler_error("(smart_incremental): si_check_ignore must be a string or a list, got: " ~ si_check_ignore) -%}
+  {%- else -%}
+      {%- set si_check_ignore = [] + si_check_ignore -%}
+  {%- endif -%}
+
   {#-- relations --#}
   {%- set existing_relation = load_cached_relation(this) -%}
   {%- set target_relation = this.incorporate(type='table') -%}
@@ -96,9 +133,60 @@
   {{ drop_relation_if_exists(preexisting_intermediate_relation) }}
   {{ drop_relation_if_exists(preexisting_backup_relation) }}
 
-  {{ run_hooks(pre_hooks) }}
+  {#-- ── si_check_update: decide whether this incremental run can be skipped ──────────
+       Evaluated BEFORE pre_hooks on purpose. A pre_hook that mutates the target
+       (e.g. `delete from {{ this }} ...`) commits a fresh Iceberg snapshot, which
+       would bump the target's `committed_at` and make the freshness check see the
+       table as newer than its sources → skip forever. So we decide skip first,
+       using the source/target snapshots as they stand at the start of the run.
 
-  {% if existing_relation is none %}
+       Only evaluated on a genuine incremental run of an EXISTING table:
+         - not the first run (existing_relation is not none, not a view)
+         - not a full refresh
+         - not the `microbatch` strategy (its batching is author-controlled)
+         - not `table` + on_table_exists='skip' (nothing would be rewritten anyway)
+       When true, we skip pre_hooks, run a no-op `main`, and touch nothing else. --#}
+  {%- set _si_skip = false -%}
+  {% if si_check_update
+        and incremental_strategy != 'microbatch'
+        and existing_relation is not none
+        and not existing_relation.is_view
+        and not full_refresh_mode
+        and not (incremental_strategy == 'table' and on_table_exists == 'skip') %}
+      {%- set _si_sources = smart_incremental.resolve_source_tables(ignore=si_check_ignore) -%}
+
+      {#-- File-only log (info=false): a copy-paste-ready hint for authors. The dbt-style
+           labels printed here can be dropped straight into `si_check_ignore`. Costs no
+           extra queries — just walks the already-resolved list in memory. --#}
+      {%- set _checked_labels = _si_sources | map(attribute='label') | list -%}
+      {% do log(
+          "(smart_incremental) si_check_update [" ~ this.identifier ~ "]"
+          ~ "\n  checking: " ~ (_checked_labels | join(', ') if _checked_labels else '(none)')
+          ~ ("\n  ignored:  " ~ (si_check_ignore | join(', ')) if si_check_ignore else ''),
+          info=false
+      ) %}
+
+      {%- set _si_skip = smart_incremental.si_should_skip_update(this, _si_sources, si_missing_committed) -%}
+  {% endif %}
+
+  {#-- pre_hooks run only when we are NOT skipping. On skip the whole run is a no-op,
+       so side-effecting hooks (which may mutate {{ this }}) must not fire. --#}
+  {% if not _si_skip %}
+    {{ run_hooks(pre_hooks) }}
+  {% endif %}
+
+  {% if _si_skip %}
+    {#-- No-op main: a pure SELECT that reads and writes nothing, so the target
+         table (data and Iceberg snapshots alike) is left completely untouched and
+         its `committed_at` stays honest. `select 1 where false` is a valid `main`
+         statement for dbt (a query runs, a result is produced) but issues no
+         DDL/DML against the target. Combined with skipping pre_hooks above, a
+         skipped run commits nothing to the table. --#}
+    {%- call statement('main') -%}
+      select 1 where false
+    {%- endcall -%}
+
+  {% elif existing_relation is none %}
     {%- call statement('main', language=language) -%}
       {{ create_table_as(False, target_relation, compiled_code, language) }}
     {%- endcall -%}
@@ -112,6 +200,12 @@
     {%- endcall -%}
   {% elif full_refresh_mode %}
     {#-- Create table with given `on_table_exists` mode #}
+    {% do on_table_exists_logic(on_table_exists, existing_relation, intermediate_relation, backup_relation, target_relation) %}
+
+  {% elif incremental_strategy == 'table' %}
+    {#-- Full-rebuild strategy: behaves exactly like the vanilla dbt-trino `table`
+         materialization. No temp relation, no delta — rewrite the whole table using
+         the same `on_table_exists_logic` helper (rename/drop/replace/skip). --#}
     {% do on_table_exists_logic(on_table_exists, existing_relation, intermediate_relation, backup_relation, target_relation) %}
 
   {% else %}
@@ -164,8 +258,12 @@
     {%- call statement('main') -%}
       {{ smart_incremental.get_incremental_sql(incremental_strategy, strategy_arg_dict) }}
     {%- endcall -%}
-  {% endif %}
+
+    {#-- Only the delta path creates a temp relation, so only drop it here.
+         The `table` / full-refresh / first-run / view / skip branches never create
+         __dbt_tmp — dropping it there was a wasted metastore round-trip. --#}
     {% do drop_relation_if_exists(tmp_relation) %}
+  {% endif %}
   {{ run_hooks(post_hooks) }}
 
   {% set should_revoke =
